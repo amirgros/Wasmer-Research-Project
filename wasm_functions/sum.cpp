@@ -1,0 +1,17 @@
+#include <emscripten.h>
+
+extern "C" { // keep the functions names as they are
+    EMSCRIPTEN_KEEPALIVE // don't remove during compilation
+    int standalone_sum(){
+        return 5 + 7;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+    int standalone_sum_with_args(int a, int b){
+        return a + b;
+    }
+}
+
+// emcc sum.cpp -o sum.wasm --no-entry -s EXPORTED_FUNCTIONS="['_standalone_sum', '_standalone_sum_with_args']"
+// --no-entry: don't generate the main function, since we won't be using it
+// -s EXPORTED_FUNCTIONS="['_standalone_sum']": export the standalone_sum function
