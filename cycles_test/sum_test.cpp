@@ -28,12 +28,13 @@ static inline uint64_t get_cycles() {
  * 
  * @param[in,out] log A reference to a cycles_log_t structure that records the cycle counts
  * @param[in] print_flag A flag to control printing of debug information
- * @param[in] with_args A flag to indicate whether the sum function takes arguments
+ * @param[in] args_vec A vector of integer arguments to pass to the function
+ * @param[in] func_name The name of the function to call in the WASM module (e.g., "standalone_sum", "sum_with_args", "long_standalone_sum")
  * 
  * @return int Returns 0 on successful completion of all tests and cleanups.
  *             Returns 1 for errors (+prints cause)
  */
-int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
+int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const char* func_name) {
     uint64_t cycles_diff_base;
 
     // 1. LOAD THE WASM FILE
@@ -44,7 +45,7 @@ int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
         printf("Error: Could not open sum.wasm. Make sure it is in the same folder!\n");
         return 1;
     }
-    fseek(file, 0, SEEK_END); 
+    fseek(file, 0, SEEK_END);
     long len = ftell(file);
     rewind(file);
 
@@ -110,16 +111,9 @@ int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
         for (size_t i = 0; i < exports.size; i++) {
             const wasm_name_t* name = wasm_exporttype_name(export_types.data[i]);
             // Note: Emscripten adds a leading underscore to C functions
-            if (with_args) {
-                if (strncmp(name->data, "sum_with_args", name->size) == 0) { // got the correct index
-                    target_func = wasm_extern_as_func(exports.data[i]); // cast the instance' export pointer to func
-                    break;
-                }
-            } else {
-                if (strncmp(name->data, "standalone_sum", name->size) == 0) { // got the correct index
-                    target_func = wasm_extern_as_func(exports.data[i]); // cast the instance' export pointer to func
-                    break;
-                }
+            if (strncmp(name->data, func_name, name->size) == 0) { // got the correct index
+                target_func = wasm_extern_as_func(exports.data[i]); // cast the instance' export pointer to func
+                break;
             }
         }
 
@@ -136,10 +130,15 @@ int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
         cycles_diff_base = get_cycles();
 
         /* --- ARGUMENTS SECTION ---*/
-       wasm_val_t args_val[2] = { WASM_I32_VAL(10), WASM_I32_VAL(20) };
-       wasm_val_vec_t args;
-        if (with_args) {
-            args = WASM_ARRAY_VEC(args_val);
+        wasm_val_vec_t args;
+        wasm_val_t* args_arr = nullptr;
+        if (!args_vec.empty()) {
+            args_arr = new wasm_val_t[args_vec.size()];
+            for (size_t idx = 0; idx < args_vec.size(); idx++) {
+                args_arr[idx] = WASM_I32_VAL(args_vec[idx]);
+            }
+            args.size = args_vec.size();
+            args.data = args_arr;
         } else {
             args = WASM_EMPTY_VEC; 
         }
@@ -168,7 +167,11 @@ int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
             cout << "Result from WebAssembly: " << results.data[0].of.i32 << endl;
         }
 
+        
         // CLEANUP
+        if (args_arr) {
+            delete[] args_arr;
+        }
         wasm_exporttype_vec_delete(&export_types);
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);
@@ -184,13 +187,14 @@ int sum_test(cycles_log_t& log, bool print_flag, bool with_args) {
 int main() {
     int num_iterations = 5;
     bool print_flag = false;
-    bool with_args = true;
+    vector<int> args_vec = {1000000};
+    const char* func_name = "loop_sum"; // "standalone_sum", "sum_with_args", "loop_sum"
 
     cycles_log_t* log = new cycles_log_t();
     log->instances_logs.resize(NUM_INSTANCES); 
     for (int i = 0; i < num_iterations; i++) {
         cout << "Running sum_test iteration " << (i + 1) << "...\n";
-        sum_test(*log, print_flag, with_args);
+        sum_test(*log, print_flag, args_vec, func_name);
     }
     devide_cycles_log(*log, num_iterations);
     print_cycles_log(*log);

@@ -10,6 +10,16 @@ extern "C" { // keep the functions names as they are
     int sum_with_args(int a, int b){
         return a + b;
     }
+
+    EMSCRIPTEN_KEEPALIVE
+    // sum 1 to n
+    int loop_sum(int n){
+        int sum = 0;
+        for (int i = 0; i < n; ++i) {
+            sum = (sum + i) ^ ((sum << 1) | (i & 3));
+        }
+        return sum;
+    }
 }
 
 // emcc sum.cpp -o sum.wasm --no-entry -s EXPORTED_FUNCTIONS="['_standalone_sum', '_sum_with_args']"

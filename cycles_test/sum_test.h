@@ -6,4 +6,5 @@
 #include "wasmer.h"
 #include "statistics_tools.h"
 
-int NUM_INSTANCES = 5;
+#define CLOCK_FREQ 2400000000 // 2.4 GHz
+#define NUM_INSTANCES 5

@@ -15,7 +15,7 @@ fi
 # 1. Extract the filename for the output (e.g., some_module.cpp -> some_module)
 BASE_NAME=$(basename -- "$SRC_FILE")
 NAME="${BASE_NAME%.*}"
-OUTPUT_DIR="bin/wasm"
+OUTPUT_DIR=$(dirname "$SRC_FILE")
 OUTPUT_PATH="${OUTPUT_DIR}/${NAME}.wasm"
 
 # 2. Ensure output directory exists

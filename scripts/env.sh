@@ -1,30 +1,32 @@
 #!/bin/bash
 
+
+#------------- CPU Frequency Scaling Setup -------------
+# 2.4GHz is the hardware's native 'Base' speed.
+# 1 cycle = 0.4166... ns | 2.4 cycles = 1 ns | 12 cycles = 5 ns
 CORE=1
-FREQ="2000MHz"
+FREQ="2400MHz"
 
-echo "Taming Core $CORE..."
+echo "Locking Core $CORE to 2.4GHz Base Clock..."
 
-# 1. Force Passive mode to regain control from hardware
-if [ -f /sys/devices/system/cpu/intel_pstate/status ]; then
-    echo "passive" | sudo tee /sys/devices/system/cpu/intel_pstate/status > /dev/null
-fi
+# Set governor to performance (stops downclocking)
+sudo cpupower -c $CORE frequency-set -g performance
 
-# 2. Disable Turbo (Try multiple known paths)
-paths=(
-    "/sys/devices/system/cpu/intel_pstate/no_turbo"
-    "/sys/devices/system/cpu/cpufreq/boost"
-)
-
-for p in "${paths[@]}"; do
-    if [ -f "$p" ]; then
-        echo "1" | sudo tee "$p" > /dev/null 2>&1 || echo "Could not write to $p"
-    fi
-done
-
-# 3. Set the frequency for Core 1
-sudo cpupower -c $CORE frequency-set -g performance -u $FREQ -d $FREQ
+# Force the range to stay at 2.4GHz
+sudo cpupower -c $CORE frequency-set -u $FREQ -d $FREQ
 
 echo "---------------------------------------"
 cpupower -c $CORE frequency-info | grep -E "current policy|asserted"
 echo "---------------------------------------"
+
+
+#------------- Setup for PERF -------------
+# Allow perf to record at any level (user and kernel)
+sudo sysctl -w kernel.perf_event_paranoid=-1
+
+# Allow perf to see kernel symbols (addresses)
+sudo sysctl -w kernel.kptr_restrict=0
+
+
+#------------- Set FlameGraph Directory -------------
+export FLAMEGRAPH_DIR=~/projects/tools/FlameGraph

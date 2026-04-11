@@ -4,6 +4,9 @@
 
 using namespace std;
 
+#define CLOCK_FREQ_GHZ 2.4
+#define CYCLES_TO_US(cycles) ((cycles) / (CLOCK_FREQ_GHZ * 1e3))
+
 typedef struct{
     uint64_t inst_cycles;
     uint64_t exeport_cycles;
@@ -21,16 +24,16 @@ typedef struct{
 
 inline void print_cycles_log(const cycles_log_t& log) {
     cout << "=== Cycles Log ===" << endl;
-    cout << "File Load:      " << log.file_load_cycles << " cycles" << endl;
-    cout << "Engine & Store: " << log.engine_store_cycles << " cycles" << endl;
-    cout << "Compile:        " << log.compile_cycles << " cycles" << endl;
+    cout << "File Load:      " << CYCLES_TO_US(log.file_load_cycles) << " us" << endl;
+    cout << "Engine & Store: " << CYCLES_TO_US(log.engine_store_cycles) << " us" << endl;
+    cout << "Compile:        " << CYCLES_TO_US(log.compile_cycles) << " us" << endl;
     cout << "\nInstances (" << log.instances_logs.size() << "):" << endl;
     for (size_t i = 0; i < log.instances_logs.size(); i++) {
         cout << "  Instance " << (i + 1) << ":" << endl;
-        cout << "    Instantiate: " << log.instances_logs[i].inst_cycles << " cycles" << endl;
-        cout << "    Find Export: " << log.instances_logs[i].exeport_cycles << " cycles" << endl;
-        cout << "    Prep Args:   " << log.instances_logs[i].arg_cycles << " cycles" << endl;
-        cout << "    Function Call: " << log.instances_logs[i].call_cycles << " cycles" << endl;
+        cout << "    Instantiate: " << CYCLES_TO_US(log.instances_logs[i].inst_cycles) << " us" << endl;
+        cout << "    Find Export: " << CYCLES_TO_US(log.instances_logs[i].exeport_cycles) << " us" << endl;
+        cout << "    Prep Args:   " << CYCLES_TO_US(log.instances_logs[i].arg_cycles) << " us" << endl;
+        cout << "    Function Call: " << CYCLES_TO_US(log.instances_logs[i].call_cycles) << " us" << endl;
     }
 }
 

@@ -2,7 +2,7 @@
 
 WASMER_HOME ?= ~/.wasmer
 CXX = g++
-CXXFLAGS = -std=c++17
+CXXFLAGS = -std=c++17 -g
 INCLUDES = -I$(WASMER_HOME)/include -I.
 LIBS = -L$(WASMER_HOME)/lib -lwasmer
 
@@ -20,7 +20,7 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -rf build
+	rm -rf build $(TARGET)
 	@echo "✓ Cleaned"
 
 help:
