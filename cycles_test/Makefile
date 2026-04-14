@@ -1,30 +1,33 @@
-.PHONY: all run clean
+.PHONY: all run clean help
 
 WASMER_HOME ?= ~/.wasmer
 CXX = g++
-CXXFLAGS = -std=c++17 -g
+CXXFLAGS = -std=c++17 -g -fno-omit-frame-pointer
 INCLUDES = -I$(WASMER_HOME)/include -I.
 LIBS = -L$(WASMER_HOME)/lib -lwasmer
 
-TARGET = sum_test
-SRC = sum_test.cpp
+# Find all .cpp files in the current directory
+SOURCES = $(wildcard *.cpp)
+# Generate executable names by replacing .cpp with nothing
+TARGETS = $(SOURCES:.cpp=)
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET): $(SRC)
-	@mkdir -p build
-	$(CXX) -o $(TARGET) $(SRC) $(INCLUDES) $(LIBS) $(CXXFLAGS)
-	@echo "✓ Built $(TARGET)"
+# Rule to build each executable from its .cpp file
+%: %.cpp
+	$(CXX) -o $@ $< $(INCLUDES) $(LIBS) $(CXXFLAGS)
+	@echo "✓ Built $@"
 
-run: $(TARGET)
-	./$(TARGET)
+run: $(TARGETS)
+	@echo "Built executables: $(TARGETS)"
+	@echo "Run them individually, e.g., ./sum_test"
 
 clean:
-	rm -rf build $(TARGET)
-	@echo "✓ Cleaned"
+	rm -f $(TARGETS)
+	@echo "✓ Cleaned executables"
 
 help:
 	@echo "Usage:"
-	@echo "  make        - Build sum_test"
-	@echo "  make run    - Build and run sum_test"
-	@echo "  make clean  - Remove build artifacts"
+	@echo "  make        - Build all executables from .cpp files"
+	@echo "  make run    - Build all and list executables"
+	@echo "  make clean  - Remove all built executables"

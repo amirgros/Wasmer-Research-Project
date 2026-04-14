@@ -29,20 +29,21 @@ static inline uint64_t get_cycles() {
  * @param[in,out] log A reference to a cycles_log_t structure that records the cycle counts
  * @param[in] print_flag A flag to control printing of debug information
  * @param[in] args_vec A vector of integer arguments to pass to the function
+ * @param[in] file_name The name of the WASM file to load (e.g., "sum.wasm", "print.wasm")
  * @param[in] func_name The name of the function to call in the WASM module (e.g., "standalone_sum", "sum_with_args", "long_standalone_sum")
  * 
  * @return int Returns 0 on successful completion of all tests and cleanups.
  *             Returns 1 for errors (+prints cause)
  */
-int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const char* func_name) {
+int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const char* file_name, const char* func_name) {
     uint64_t cycles_diff_base;
 
     // 1. LOAD THE WASM FILE
     // We manually read the bytes from the file you compiled with Emscripten
     cycles_diff_base = get_cycles();
-    FILE* file = fopen("./wasm/sum.wasm", "rb");
+    FILE* file = fopen(file_name, "rb");
     if (!file) {
-        printf("Error: Could not open sum.wasm. Make sure it is in the same folder!\n");
+        printf("Error: Could not open %s. Make sure it is in the same folder!\n", file_name);
         return 1;
     }
     fseek(file, 0, SEEK_END);
@@ -57,6 +58,7 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
         cout << "Wasm file loaded. Cycle: " << (get_cycles() - cycles_diff_base) << endl;
     }
     log.file_load_cycles += (get_cycles() - cycles_diff_base);
+  
 
     // 2. SETUP THE ENGINE & STORE
     cycles_diff_base = get_cycles();
@@ -66,6 +68,7 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
         cout << "Engine and store created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
     }
     log.engine_store_cycles += (get_cycles() - cycles_diff_base);
+
 
     // 3. COMPILE THE MODULE
     cycles_diff_base = get_cycles();
@@ -79,24 +82,46 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
         cout << "Module compiled successfully. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
     }
     log.compile_cycles += (get_cycles() - cycles_diff_base);
+    
 
     // 4. INSTANTIATE (THE HANDSHAKE)
     for (int i = 0; i < NUM_INSTANCES; i++) {
         if (print_flag) {
             cout << "Instantiating module instance " << (i + 1) << "...\n";
         }
-        // Since we aren't using WASI or printing yet, imports are empty
+        
+        // imports are created per flag
+        // Setup the WASI environment
         cycles_diff_base = get_cycles();
-        wasm_extern_vec_t imports = WASM_EMPTY_VEC;
-        wasm_instance_t* instance = wasm_instance_new(store, module, &imports, NULL); // last argument is for traps
+        wasi_config_t* config = wasi_config_new("my_wasm_app");
+        wasi_config_inherit_stdout(config);
+
+        wasi_env_t* wasi_env = wasi_env_new(store, config);
+        // wasi_env_initialize_for_module(wasi_env, module);
+        wasm_extern_vec_t wasi_imports;
+        bool get_imports_result = wasi_get_imports(store, wasi_env, module, &wasi_imports);
+        if (!get_imports_result) {
+            printf("Error: Failed to get WASI imports!\n");
+            return 1;
+        }
+        if (print_flag) {
+            cout << "WASI imports created. Cycle: " << (get_cycles() - cycles_diff_base) << endl;
+        }
+        log.imports_cycles += (get_cycles() - cycles_diff_base);
+
+        // Continue instantiation
+        cycles_diff_base = get_cycles();
+        wasm_instance_t* instance = wasm_instance_new(store, module, &wasi_imports, NULL); // last argument is for traps
         if (!instance) {
             printf("Error: Failed to instantiate the module!\n");
             return 1;
         }
-        log.instances_logs[i].inst_cycles = (get_cycles() - cycles_diff_base);
+
+        wasi_env_initialize_instance(wasi_env, store, instance);
         if (print_flag) {
             cout << "Module instantiated successfully. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
+        log.instances_logs[i].inst_cycles = (get_cycles() - cycles_diff_base);
 
         // 5. FIND THE FUNCTION IN EXPORTS
         cycles_diff_base = get_cycles();
@@ -173,6 +198,8 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
             delete[] args_arr;
         }
         wasm_exporttype_vec_delete(&export_types);
+        wasi_env_delete(wasi_env); 
+        wasm_extern_vec_delete(&wasi_imports);
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);
     }
@@ -185,17 +212,17 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
 
 
 int main() {
-    int num_iterations = 50;
-    bool print_flag = false;
-    vector<int> args_vec = {1000000};
-    const char* func_name = "loop_sum"; // "standalone_sum", "sum_with_args", "loop_sum"
+    int num_iterations = 5;
+    bool print_flag = true;
+    vector<int> args_vec = {};
+    const char* file_name = "./wasm/print.wasm"; 
+    const char* func_name = "hello"; // "standalone_sum", "sum_with_args", "loop_sum"
 
     cycles_log_t* log = new cycles_log_t();
-    log->imports_cycles = 0;
     log->instances_logs.resize(NUM_INSTANCES); 
     for (int i = 0; i < num_iterations; i++) {
         cout << "Running sum_test iteration " << (i + 1) << "...\n";
-        sum_test(*log, print_flag, args_vec, func_name);
+        test(*log, print_flag, args_vec, file_name, func_name);
     }
     devide_cycles_log(*log, num_iterations);
     print_cycles_log(*log);

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Use source when running
 
 #------------- CPU Frequency Scaling Setup -------------
 # 2.4GHz is the hardware's native 'Base' speed.
@@ -30,3 +31,4 @@ sudo sysctl -w kernel.kptr_restrict=0
 
 #------------- Set FlameGraph Directory -------------
 export FLAMEGRAPH_DIR=~/projects/tools/FlameGraph
+echo "FLAMEGRAPH_DIR set to: $FLAMEGRAPH_DIR"
