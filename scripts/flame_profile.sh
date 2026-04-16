@@ -18,7 +18,7 @@
 # Check for required environment variable
 if [ -z "$FLAMEGRAPH_DIR" ]; then
     echo "Error: FLAMEGRAPH_DIR is not set."
-    echo "Please run: export FLAMEGRAPH_DIR=/path/to/FlameGraph"
+    echo "Please run env script with source: source ./scripts/env.sh"
     exit 1
 fi
 

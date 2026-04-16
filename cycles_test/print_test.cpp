@@ -1,26 +1,4 @@
-#include "sum_test.h"
-
-using namespace std;
- 
-/**
- * @brief Reads the 64-bit Time-Stamp Counter.
- *
- * Returns the number of clock cycles since the last CPU reset.
- */
-static inline uint64_t get_cycles() {
-    uint32_t low, high;
-   
-    // "=a" (EAX) and "=d" (EDX) are the output registers for rdtsc.
-    // __asm__ __volatile__ prevents the compiler from optimizing out
-    // or reordering the instruction incorrectly.
-    __asm__ __volatile__ (
-        "rdtsc"
-        : "=a" (low), "=d" (high)
-    );
- 
-    return ((uint64_t)high << 32) | low;
-}
-
+#include "includes.h"
 
 
 /**
@@ -85,7 +63,7 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
     
 
     // 4. INSTANTIATE (THE HANDSHAKE)
-    for (int i = 0; i < NUM_INSTANCES; i++) {
+    for (int i = 0; i < log.instances_logs.size(); i++) {
         if (print_flag) {
             cout << "Instantiating module instance " << (i + 1) << "...\n";
         }
@@ -121,7 +99,7 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
         if (print_flag) {
             cout << "Module instantiated successfully. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].inst_cycles = (get_cycles() - cycles_diff_base);
+        log.instances_logs[i].inst_cycles += (get_cycles() - cycles_diff_base);
 
         // 5. FIND THE FUNCTION IN EXPORTS
         cycles_diff_base = get_cycles();
@@ -149,7 +127,7 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
         if (print_flag) {
             cout << "Exported function found. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].exeport_cycles = (get_cycles() - cycles_diff_base);
+        log.instances_logs[i].exeport_cycles += (get_cycles() - cycles_diff_base);
 
         // 6. PREPARE ARGUMENTS AND RESULTS
         cycles_diff_base = get_cycles();
@@ -174,7 +152,7 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
         if (print_flag) {
             cout << "Arguments and results prepared. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].arg_cycles = (get_cycles() - cycles_diff_base);
+        log.instances_logs[i].arg_cycles += (get_cycles() - cycles_diff_base);
 
         // 7. THE CALL
         cycles_diff_base = get_cycles();
@@ -185,7 +163,7 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
         if (print_flag) {
             cout << "Function called successfully. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].call_cycles = (get_cycles() - cycles_diff_base);
+        log.instances_logs[i].call_cycles += (get_cycles() - cycles_diff_base);
 
         // 8. PRINT THE OUTPUT
         if (print_flag) {
@@ -212,19 +190,21 @@ int test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, const 
 
 
 int main() {
-    int num_iterations = 5;
+    int main_iterations = 5;
+    int call_iterations = 1;
+    int num_instances = 2;
     bool print_flag = true;
     vector<int> args_vec = {};
     const char* file_name = "./wasm/print.wasm"; 
     const char* func_name = "hello"; // "standalone_sum", "sum_with_args", "loop_sum"
 
     cycles_log_t* log = new cycles_log_t();
-    log->instances_logs.resize(NUM_INSTANCES); 
-    for (int i = 0; i < num_iterations; i++) {
+    log->instances_logs.resize(num_instances); 
+    for (int i = 0; i < main_iterations; i++) {
         cout << "Running sum_test iteration " << (i + 1) << "...\n";
         test(*log, print_flag, args_vec, file_name, func_name);
     }
-    devide_cycles_log(*log, num_iterations);
+    devide_cycles_log(*log, main_iterations, call_iterations);
     print_cycles_log(*log);
     delete log;
 }
