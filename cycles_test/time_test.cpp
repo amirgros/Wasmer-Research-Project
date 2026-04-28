@@ -45,7 +45,12 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
 
     // 2. SETUP THE ENGINE & STORE
     cycles_diff_base = get_cycles();
+    // wasm_config_t* engine_config = wasm_config_new();
+    // wasm_config_set_backend(engine_config, LLVM);
+
+    // wasm_engine_t* engine = wasm_engine_new_with_config(engine_config);
     wasm_engine_t* engine = wasm_engine_new();
+
     wasm_store_t* store = wasm_store_new(engine); // MEM
     log.engine_store_cycles += (get_cycles() - cycles_diff_base);
     if (print_flag) {
@@ -72,8 +77,7 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
         
     // 4. SETUP THE WASI ENVIRONMENT AND IMPORTS
     cycles_diff_base = get_cycles();
-    wasi_config_t* config = wasi_config_new("print_test_config"); // define permissions and env for called symbols. can map folders
-    wasi_config_inherit_stdout(config); 
+    wasi_config_t* config = wasi_config_new("math_test_app"); // define permissions and env for called symbols. can map folders
 
     wasi_env_t* wasi_env = wasi_env_new(store, config);
 
@@ -168,7 +172,7 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
 
         // ---------------------------------------------------------------------------------------
     
-        // // 8. INITIALIZE THE WASI ENVIRONMENT
+        // 8. INITIALIZE THE WASI ENVIRONMENT
         cycles_diff_base = get_cycles();
         wasi_env_initialize_instance(wasi_env, store, instance);
         log.instances_logs[i].init_env += (get_cycles() - cycles_diff_base);
@@ -240,8 +244,8 @@ int main() {
     int num_instances = 1;
     bool print_flag = false;
     vector<int> args_vec = {};
-    const char* file_name = "./wasm/print.wasm"; 
-    const char* func_name = "hello";
+    const char* file_name = "./wasm/time.wasm"; 
+    const char* func_name = "wasm_time";
 
     cycles_log_t* log = new cycles_log_t();
     log->instances_logs.resize(num_instances); 
@@ -262,7 +266,7 @@ int main() {
     uint64_t curr_loop_cycles = 0; 
     for (int i = 0; i < main_iterations*call_iterations; i++) {
         curr_loop_cycles = get_cycles(); 
-        printf(" ");
+        (int)time(NULL);
         direct_call_cycles += get_cycles() - curr_loop_cycles;
     }
     cout << "Direct call cycles (average): " << CYCLES_TO_US(direct_call_cycles / (main_iterations*call_iterations)) << " us" << endl;
