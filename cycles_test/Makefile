@@ -1,10 +1,11 @@
 .PHONY: all run clean help
 
-WASMER_HOME ?= ~/.wasmer
+# WASMER_HOME ?= ~/.wasmer
 CXX = g++
 CXXFLAGS = -std=c++17 -g -fno-omit-frame-pointer
-INCLUDES = -I$(WASMER_HOME)/include -I.
-LIBS = -L$(WASMER_HOME)/lib -lwasmer
+WASMER_HOME = /csl/amirgrossman/projects/tools/wasmer/target/release
+INCLUDES    = -I$(WASMER_HOME) -I.
+LIBS        = -L$(WASMER_HOME) -lwasmer -Wl,-rpath,$(WASMER_HOME),--disable-new-dtags
 
 # Find all .cpp files in the current directory
 SOURCES = $(wildcard *.cpp)

@@ -102,7 +102,7 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
         if (print_flag) {
             cout << "Exported function found. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].exeport_cycles += (get_cycles() - cycles_diff_base);
+        // log.instances_logs[i].exeport_cycles += (get_cycles() - cycles_diff_base);
 
         // 6. PREPARE ARGUMENTS AND RESULTS
         cycles_diff_base = get_cycles();
@@ -127,7 +127,7 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
         if (print_flag) {
             cout << "Arguments and results prepared. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
         }
-        log.instances_logs[i].arg_cycles += (get_cycles() - cycles_diff_base);
+        // log.instances_logs[i].arg_cycles += (get_cycles() - cycles_diff_base);
 
         // 7. THE CALL
         cycles_diff_base = get_cycles();

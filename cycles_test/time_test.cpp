@@ -207,7 +207,7 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
                 return 1;
             }
             log.instances_logs[i].call_cycles += (get_cycles() - cycles_diff_base);
-            if (print_flag) {
+            if (true) {
                 cout << "Function called successfully. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
             }
         }
@@ -239,9 +239,9 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
 
 
 int main() {
-    int main_iterations = 50;
-    int call_iterations = 100;
-    int num_instances = 1;
+    int main_iterations = 1;
+    int call_iterations = 1;
+    int num_instances = 10;
     bool print_flag = false;
     vector<int> args_vec = {};
     const char* file_name = "./wasm/time.wasm"; 

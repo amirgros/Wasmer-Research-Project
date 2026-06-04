@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Usage: ./scripts/compile_wasm.sh <source_file> <function_names_comma_separated>
+# Usage: ./scripts/compile_wasm.sh <source_file> <function1,function2>
 # Example: ./scripts/compile_wasm.sh src/modules/core_logic/math.cpp standalone_sum,reset_timer
 
 SRC_FILE=$1
@@ -31,13 +31,16 @@ else
     EXPORT_FLAG=""
 fi
 
+# 4. Set debug and optimization flags (always debug for research)
+DEBUG_FLAG="-g"
+
 # 4. Execute emcc
 echo "Compiling $SRC_FILE..."
 emcc "$SRC_FILE" \
     -o "$OUTPUT_PATH" \
     --no-entry \
     $EXPORT_FLAG \
-    -O3 \
+    $DEBUG_FLAG \
     -s ERROR_ON_UNDEFINED_SYMBOLS=0
 
 if [ $? -eq 0 ]; then
