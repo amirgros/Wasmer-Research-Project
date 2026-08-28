@@ -1,4 +1,17 @@
 # Wasmer-Research-Project
+info...
+
+## How To Run
+
+env..
+cycles..
+
+## Adjustments to Wasmer Repo
+
+add the commit of my perf trace code
+how to compile...
+
+## project tree
 
 ├── bin/                   # All executable artifacts (Git-ignored)
 │   ├── wasm/              # Compiled .wasm modules (The payloads)
