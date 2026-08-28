@@ -1,0 +1,728 @@
+diff --git a/cycles.h b/cycles.h
+new file mode 100644
+index 00000000000..a20be70f2cc
+--- /dev/null
++++ b/cycles.h
+@@ -0,0 +1,24 @@
++#ifndef GET_CYCLES_H
++#define GET_CYCLES_H
++
++#include <stdint.h>
++
++/**
++ * @brief Reads the 64-bit Time-Stamp Counter.
++ *
++ * Returns the number of clock cycles since the last CPU reset.
++ */
++static inline uint64_t get_cycles() {
++    uint32_t low, high;
++   
++    // "=a" (EAX) and "=d" (EDX) are the output registers for rdtsc.
++    // __asm__ __volatile__ prevents the compiler from optimizing out
++    // or reordering the instruction incorrectly.
++    __asm__ __volatile__ (
++        "rdtsc"
++        : "=a" (low), "=d" (high)
++    );
++ 
++    return ((uint64_t)high << 32) | low;
++}
++#endif // GET_CYCLES_H
+\ No newline at end of file
+diff --git a/lib/compiler/src/engine/artifact.rs b/lib/compiler/src/engine/artifact.rs
+index d807fdf4963..ab0f25c8bd8 100644
+--- a/lib/compiler/src/engine/artifact.rs
++++ b/lib/compiler/src/engine/artifact.rs
+@@ -711,6 +711,10 @@ impl DataInitializerLocationLike for DataInitializerLocationVariant<'_> {
+     }
+ }
+ 
++// ── PERF INSTRUMENTATION ─────────────────────────────────────────────────────
++use wasmer_vm::perf_trace::{get_cycles, perf_record};
++// ── END PERF INSTRUMENTATION ─────────────────────────────────────────────────
++
+ impl Artifact {
+     fn internal_register_frame_info(&mut self) -> Result<(), DeserializeError> {
+         if self
+@@ -850,8 +854,9 @@ impl Artifact {
+ 
+             let module = self.create_module_info();
+ 
++            // S1: import resolution
++            let t_s1_begin = get_cycles();
+             let tags = resolve_tags(&module, imports, context).map_err(InstantiationError::Link)?;
+-
+             let imports = resolve_imports(
+                 &module,
+                 imports,
+@@ -861,16 +866,26 @@ impl Artifact {
+                 self.table_styles(),
+             )
+             .map_err(InstantiationError::Link)?;
++            perf_record("instnt S1 import_resolve", t_s1_begin, get_cycles());
+ 
+             // Get pointers to where metadata about local memories should live in VM memory.
+             // Get pointers to where metadata about local tables should live in VM memory.
+ 
++            // S2: memory / table / global allocation (mmap + mprotect)
++            let t_s2_begin = get_cycles();
++
++            // S2a: raw malloc for Instance struct + VMContext tail
++            let t_s2a = get_cycles();
+             let (
+                 allocator,
+                 memory_definition_locations,
+                 table_definition_locations,
+                 global_definition_locations,
+             ) = InstanceAllocator::new(&module);
++            perf_record("instnt S2a vmctx_malloc", t_s2a, get_cycles());
++
++            // S2b: linear memory mmap (reserve VA + mprotect initial pages)
++            let t_s2b = get_cycles();
+             let finished_memories = tunables
+                 .create_memories(
+                     context,
+@@ -880,6 +895,10 @@ impl Artifact {
+                 )
+                 .map_err(InstantiationError::Link)?
+                 .into_boxed_slice();
++            perf_record("instnt S2b create_memories", t_s2b, get_cycles());
++
++            // S2c: table allocation (malloc for funcref array)
++            let t_s2c = get_cycles();
+             let finished_tables = tunables
+                 .create_tables(
+                     context,
+@@ -889,11 +908,20 @@ impl Artifact {
+                 )
+                 .map_err(InstantiationError::Link)?
+                 .into_boxed_slice();
++            perf_record("instnt S2c create_tables", t_s2c, get_cycles());
++
++            // S2d: globals (inline in VMContext, no separate alloc)
++            let t_s2d = get_cycles();
+             let finished_globals = tunables
+                 .create_globals(context, &module, &global_definition_locations)
+                 .map_err(InstantiationError::Link)?
+                 .into_boxed_slice();
++            perf_record("instnt S2d create_globals", t_s2d, get_cycles());
++
++            perf_record("instnt S2 mem_alloc", t_s2_begin, get_cycles());
+ 
++            // S3: VMInstance construction (funcrefs, import copy, globals) — see sub-entries
++            let t_s3_begin = get_cycles();
+             let handle = VMInstance::new(
+                 allocator,
+                 module,
+@@ -908,6 +936,8 @@ impl Artifact {
+                 self.signatures().clone(),
+             )
+             .map_err(InstantiationError::Start)?;
++            perf_record("instnt S3 vm_new (total)", t_s3_begin, get_cycles());
++
+             Ok(handle)
+         }
+     }
+@@ -925,6 +955,8 @@ impl Artifact {
+         handle: &mut VMInstance,
+     ) -> Result<(), InstantiationError> {
+         unsafe {
++            // S4-pre: collect data initializers (iterator over archived bytes)
++            let t_s4pre_begin = get_cycles();
+             let data_initializers = self
+                 .data_initializers()
+                 .map(|init| DataInitializer {
+@@ -932,9 +964,15 @@ impl Artifact {
+                     data: init.data(),
+                 })
+                 .collect::<Vec<_>>();
+-            handle
++            perf_record("instnt S4pre collect_data", t_s4pre_begin, get_cycles());
++
++            // S4-S6: tables / memories / start function (sub-entries emitted inside VMInstance)
++            let t_finish_begin = get_cycles();
++            let r = handle
+                 .finish_instantiation(config, trap_handler, &data_initializers)
+-                .map_err(InstantiationError::Start)
++                .map_err(InstantiationError::Start);
++            perf_record("instnt finish (total)", t_finish_begin, get_cycles());
++            r
+         }
+     }
+ 
+diff --git a/lib/vm/src/instance/mod.rs b/lib/vm/src/instance/mod.rs
+index 3741bbb25a9..996501f1fed 100644
+--- a/lib/vm/src/instance/mod.rs
++++ b/lib/vm/src/instance/mod.rs
+@@ -43,6 +43,10 @@ use wasmer_types::{
+     VMOffsets,
+ };
+ 
++// ── PERF INSTRUMENTATION ─────────────────────────────────────────────────────
++use crate::perf_trace::{get_cycles, perf_record};
++// ── END PERF INSTRUMENTATION ─────────────────────────────────────────────────
++
+ /// A WebAssembly instance.
+ ///
+ /// The type is dynamically-sized. Indeed, the `vmctx` field can
+@@ -1189,7 +1193,8 @@ impl VMInstance {
+ 
+                 let mut instance_handle = allocator.into_vminstance(instance);
+ 
+-                // Set the funcrefs after we've built the instance
++                // S3a: build funcrefs
++                let t_s3a_begin = get_cycles();
+                 {
+                     let instance = instance_handle.instance_mut();
+                     let vmctx_ptr = instance.vmctx_ptr();
+@@ -1206,11 +1211,14 @@ impl VMInstance {
+                         instance.sync_fixed_funcref_table(local_table_index);
+                     }
+                 }
++                perf_record("instnt S3a build_funcrefs", t_s3a_begin, get_cycles());
+ 
+                 instance_handle
+             };
+             let instance = handle.instance();
+ 
++            // S3b: copy imports into vmctx
++            let t_s3b_begin = get_cycles();
+             ptr::copy(
+                 vmctx_tags.values().as_slice().as_ptr(),
+                 instance.shared_tags_ptr(),
+@@ -1243,11 +1251,15 @@ impl VMInstance {
+                 instance.builtin_functions_ptr(),
+                 VMBuiltinFunctionsArray::initialized(),
+             );
++            perf_record("instnt S3b copy_imports", t_s3b_begin, get_cycles());
+ 
++            // S3c: passive elements + globals init
++            let t_s3c_begin = get_cycles();
+             // Perform infallible initialization in this constructor, while fallible
+             // initialization is deferred to the `initialize` method.
+             initialize_passive_elements(instance);
+             initialize_globals(instance);
++            perf_record("instnt S3c passive+globals", t_s3c_begin, get_cycles());
+ 
+             Ok(handle)
+         }
+@@ -1276,13 +1288,21 @@ impl VMInstance {
+     ) -> Result<(), Trap> {
+         let instance = self.instance_mut();
+ 
+-        // Apply the initializers.
++        // S4: table initialization
++        let t_s4_begin = get_cycles();
+         initialize_tables(instance)?;
++        perf_record("instnt S4 init_tables", t_s4_begin, get_cycles());
++
++        // S5: memory initialization (memcpy of data segments, demand-faults wasm pages)
++        let t_s5_begin = get_cycles();
+         initialize_memories(instance, data_initializers)?;
++        perf_record("instnt S5 init_memories", t_s5_begin, get_cycles());
+ 
+-        // The WebAssembly spec specifies that the start function is
+-        // invoked automatically at instantiation time.
++        // S6: start function (if present; goes through catch_traps / trampoline)
++        let t_s6_begin = get_cycles();
+         instance.invoke_start_function(config, trap_handler)?;
++        perf_record("instnt S6 start_fn", t_s6_begin, get_cycles());
++
+         Ok(())
+     }
+ 
+diff --git a/lib/vm/src/lib.rs b/lib/vm/src/lib.rs
+index 52770bf3d94..d2754ee7259 100644
+--- a/lib/vm/src/lib.rs
++++ b/lib/vm/src/lib.rs
+@@ -23,6 +23,7 @@ mod imports;
+ mod instance;
+ mod memory;
+ mod mmap;
++pub mod perf_trace;
+ mod probestack;
+ mod sig_registry;
+ mod store;
+diff --git a/lib/vm/src/memory.rs b/lib/vm/src/memory.rs
+index e7bc85791b5..535fca08db0 100644
+--- a/lib/vm/src/memory.rs
++++ b/lib/vm/src/memory.rs
+@@ -7,6 +7,7 @@
+ 
+ use crate::threadconditions::ThreadConditions;
+ pub use crate::threadconditions::{NotifyLocation, WaiterError};
++use crate::perf_trace::{get_cycles, perf_record};
+ use crate::trap::Trap;
+ use crate::{
+     mmap::{Mmap, MmapType},
+@@ -17,24 +18,112 @@ use crate::{
+ use more_asserts::assert_ge;
+ use std::cell::UnsafeCell;
+ use std::convert::TryInto;
++use std::mem::ManuallyDrop;
+ use std::ptr::NonNull;
+ use std::rc::Rc;
+ use std::slice;
+ use std::sync::RwLock;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::OnceLock;
+ use std::time::Duration;
+ use wasmer_types::{Bytes, MemoryError, MemoryStyle, MemoryType, Pages, WASM_PAGE_SIZE};
+ 
++// ── Linear memory pool ────────────────────────────────────────────────────────
++
++/// Set to `true` to reuse linear memory mmaps across instances instead of
++/// unmapping and re-mmapping each time.  Flip and recompile to compare.
++const USE_LINEAR_MEMORY_POOL: bool = true;
++
++/// A pooled mmap: raw components of a `Mmap` that we are holding without
++/// unmapping. `Drop` munmaps it so pool drain is automatic.
++struct PooledLinearMemory {
++    ptr: usize,
++    total_size: usize,
++    accessible_size: usize,
++}
++
++impl Drop for PooledLinearMemory {
++    fn drop(&mut self) {
++        if self.total_size != 0 {
++            unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.total_size); }
++        }
++    }
++}
++
++impl PooledLinearMemory {
++    /// Reconstruct a live `Mmap` from this entry (prevents Drop from munmapping).
++    fn into_mmap(self) -> Mmap {
++        let (ptr, total, acc) = (self.ptr, self.total_size, self.accessible_size);
++        std::mem::forget(self);
++        unsafe { Mmap::from_raw(ptr, total, acc) }
++    }
++}
++
++static LINEAR_MEMORY_POOL: OnceLock<crossbeam_queue::SegQueue<PooledLinearMemory>> =
++    OnceLock::new();
++
++fn linear_memory_pool() -> &'static crossbeam_queue::SegQueue<PooledLinearMemory> {
++    LINEAR_MEMORY_POOL.get_or_init(crossbeam_queue::SegQueue::new)
++}
++
++static POOL_HIT_COUNT:  AtomicUsize = AtomicUsize::new(0);
++static POOL_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
++
++/// Drain the linear memory pool, unmapping all cached entries.
++/// Call between test runs when changing initial page counts.
++#[unsafe(no_mangle)]
++pub extern "C" fn wasmer_linear_memory_pool_drain() {
++    if let Some(q) = LINEAR_MEMORY_POOL.get() {
++        while q.pop().is_some() {}
++    }
++}
++
++/// Print pool hit/miss statistics and reset counters.
++#[unsafe(no_mangle)]
++pub extern "C" fn wasmer_linear_memory_pool_stats() {
++    let hits  = POOL_HIT_COUNT.swap(0, Ordering::Relaxed);
++    let misses = POOL_MISS_COUNT.swap(0, Ordering::Relaxed);
++    let msg = format!("[POOL] linear_memory  hits={}  misses={}\n", hits, misses);
++    unsafe { libc::write(1, msg.as_ptr() as *const libc::c_void, msg.len()); }
++}
++
++// ── WasmMmap ─────────────────────────────────────────────────────────────────
++
+ // The memory mapped area
+ #[derive(Debug)]
+ struct WasmMmap {
+     // Our OS allocation of mmap'd memory.
+-    alloc: Mmap,
++    // ManuallyDrop so we can intercept destruction and return to pool.
++    alloc: ManuallyDrop<Mmap>,
+     // The current logical size in wasm pages of this linear memory.
+     size: Pages,
+     /// The owned memory definition used by the generated code
+     vm_memory_definition: MaybeInstanceOwned<VMMemoryDefinition>,
+ }
+ 
++impl Drop for WasmMmap {
++    fn drop(&mut self) {
++        let mmap = unsafe { ManuallyDrop::take(&mut self.alloc) };
++
++        if USE_LINEAR_MEMORY_POOL {
++            let (ptr, total_size, accessible_size) = mmap.into_raw();
++            // Release physical pages back to OS without removing the VA mapping.
++            // They will come back as zeroes on next access (demand paging).
++            if accessible_size > 0 {
++                unsafe {
++                    libc::madvise(
++                        ptr as *mut libc::c_void,
++                        accessible_size,
++                        libc::MADV_DONTNEED,
++                    );
++                }
++            }
++            linear_memory_pool().push(PooledLinearMemory { ptr, total_size, accessible_size });
++        }
++        // if !USE_LINEAR_MEMORY_POOL: mmap is dropped here → munmap
++    }
++}
++
+ impl WasmMmap {
+     fn get_vm_memory_definition(&self) -> NonNull<VMMemoryDefinition> {
+         self.vm_memory_definition.as_ptr()
+@@ -106,7 +195,10 @@ impl WasmMmap {
+             let copy_len = self.alloc.len() - conf.offset_guard_size;
+             new_mmap.as_mut_slice()[..copy_len].copy_from_slice(&self.alloc.as_slice()[..copy_len]);
+ 
+-            self.alloc = new_mmap;
++            // Explicitly drop the old mmap (munmap) before replacing.
++            // With ManuallyDrop we must do this ourselves.
++            unsafe { ManuallyDrop::drop(&mut self.alloc) };
++            self.alloc = ManuallyDrop::new(new_mmap);
+         } else if delta_bytes > 0 {
+             // Make the newly allocated pages accessible.
+             self.alloc
+@@ -168,7 +260,7 @@ impl WasmMmap {
+                     current_length: mem_length,
+                 },
+             ))),
+-            alloc,
++            alloc: ManuallyDrop::new(alloc),
+             size: self.size,
+         })
+     }
+@@ -334,10 +426,35 @@ impl VMOwnedMemory {
+             let mapped_pages = memory.minimum;
+             let mapped_bytes = mapped_pages.bytes();
+ 
+-            let mut alloc =
+-                Mmap::accessible_reserved(mapped_bytes.0, request_bytes, backing_file, memory_type)
++            // mem S2b-i: get mmap from pool or via syscall
++            let t_mmap = get_cycles();
++            let mut alloc = if USE_LINEAR_MEMORY_POOL {
++                // Reuse a pooled entry when total_size and accessible_size both match.
++                // Exact match means no mmap, no mprotect, and no madvise needed here
++                // (madvise was already done when the entry was returned to the pool).
++                let pool_entry = linear_memory_pool().pop().filter(|e| {
++                    e.total_size == request_bytes && e.accessible_size == mapped_bytes.0
++                });
++                if let Some(entry) = pool_entry {
++                    POOL_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
++                    perf_record("mem pool hit (no syscall)", t_mmap, get_cycles());
++                    entry.into_mmap()
++                } else {
++                    POOL_MISS_COUNT.fetch_add(1, Ordering::Relaxed);
++                    let m = Mmap::accessible_reserved(mapped_bytes.0, request_bytes, backing_file, memory_type)
++                        .map_err(MemoryError::Region)?;
++                    perf_record("mem pool miss (mmap+mprotect)", t_mmap, get_cycles());
++                    m
++                }
++            } else {
++                let m = Mmap::accessible_reserved(mapped_bytes.0, request_bytes, backing_file, memory_type)
+                     .map_err(MemoryError::Region)?;
++                perf_record("mem S2b-i mmap+mprotect", t_mmap, get_cycles());
++                m
++            };
+ 
++            // mem S2b-ii: write {base, current_length} into VMContext slot
++            let t_vmdef = get_cycles();
+             let base_ptr = alloc.as_mut_ptr();
+             let mem_length = memory
+                 .minimum
+@@ -359,9 +476,10 @@ impl VMOwnedMemory {
+                         current_length: mem_length,
+                     })))
+                 },
+-                alloc,
++                alloc: ManuallyDrop::new(alloc),
+                 size: Bytes::from(mem_length).try_into().unwrap(),
+             };
++            perf_record("mem S2b-ii vmdef_writeback", t_vmdef, get_cycles());
+ 
+             Ok(Self {
+                 mmap,
+diff --git a/lib/vm/src/mmap.rs b/lib/vm/src/mmap.rs
+index 75a18524f90..0bfb0b07f1f 100644
+--- a/lib/vm/src/mmap.rs
++++ b/lib/vm/src/mmap.rs
+@@ -4,6 +4,7 @@
+ //! Low-level abstraction for allocating and managing zero-filled pages
+ //! of memory.
+ 
++use crate::perf_trace::{get_cycles, perf_record};
+ use more_asserts::assert_le;
+ use std::io;
+ use std::ptr;
+@@ -125,7 +126,8 @@ impl Mmap {
+         };
+ 
+         Ok(if accessible_size == mapping_size {
+-            // Allocate a single read-write region at once.
++            // Allocate a single read-write region at once (dynamic mode: no guard needed).
++            let t_mmap = get_cycles();
+             let ptr = unsafe {
+                 libc::mmap(
+                     ptr::null_mut(),
+@@ -136,6 +138,7 @@ impl Mmap {
+                     0,
+                 )
+             };
++            perf_record("mmap syscall (rw, no guard)", t_mmap, get_cycles());
+             if ptr as isize == -1_isize {
+                 return Err(io::Error::last_os_error().to_string());
+             }
+@@ -147,7 +150,8 @@ impl Mmap {
+                 sync_on_drop: memory_fd != -1 && memory_type == MmapType::Shared,
+             }
+         } else {
+-            // Reserve the mapping size.
++            // Static mode: reserve full VA range PROT_NONE, then commit initial pages.
++            let t_mmap = get_cycles();
+             let ptr = unsafe {
+                 libc::mmap(
+                     ptr::null_mut(),
+@@ -158,6 +162,7 @@ impl Mmap {
+                     0,
+                 )
+             };
++            perf_record("mmap syscall (none, reserve)", t_mmap, get_cycles());
+             if ptr as isize == -1_isize {
+                 return Err(io::Error::last_os_error().to_string());
+             }
+@@ -171,7 +176,9 @@ impl Mmap {
+ 
+             if accessible_size != 0 {
+                 // Commit the accessible size.
++                let t_mprot = get_cycles();
+                 result.make_accessible(0, accessible_size)?;
++                perf_record("mprotect (commit initial pages)", t_mprot, get_cycles());
+             }
+ 
+             result
+@@ -370,6 +377,23 @@ impl Mmap {
+     }
+ }
+ 
++impl Mmap {
++    /// Consume the Mmap without unmapping it, returning its raw components.
++    /// The caller takes responsibility for eventually unmapping `ptr`.
++    pub fn into_raw(self) -> (usize, usize, usize) {
++        let m = std::mem::ManuallyDrop::new(self);
++        (m.ptr, m.total_size, m.accessible_size)
++    }
++
++    /// Reconstruct a Mmap from raw components previously obtained via `into_raw`.
++    /// # Safety
++    /// `ptr` must be a valid anonymous private mmap of exactly `total_size` bytes
++    /// with `accessible_size` bytes mapped PROT_READ|WRITE at the start.
++    pub unsafe fn from_raw(ptr: usize, total_size: usize, accessible_size: usize) -> Self {
++        Self { ptr, total_size, accessible_size, sync_on_drop: false }
++    }
++}
++
+ impl Drop for Mmap {
+     #[cfg(not(target_os = "windows"))]
+     fn drop(&mut self) {
+diff --git a/lib/vm/src/perf_trace.rs b/lib/vm/src/perf_trace.rs
+new file mode 100644
+index 00000000000..16ecd38d44c
+--- /dev/null
++++ b/lib/vm/src/perf_trace.rs
+@@ -0,0 +1,100 @@
++//! Lock-free perf trace buffer — zero print overhead during measurement.
++//! In Rust:  [`perf_record`]`("label", begin_cycles, end_cycles)`
++//! From C:   `wasmer_perf_dump()`  — print all recorded entries and reset
++//!           `wasmer_perf_reset()` — discard all entries without printing
++
++use std::cell::RefCell;
++use std::sync::OnceLock;
++
++/// A single begin/end cycle-count measurement recorded by [`perf_record`].
++pub struct PerfEntry {
++    /// Static label identifying this measurement point.
++    pub label: &'static str,
++    /// TSC value at the start of the measured section.
++    pub begin: u64,
++    /// TSC value at the end of the measured section.
++    pub end: u64,
++}
++
++thread_local! {
++    static PERF_BUFFER: RefCell<Vec<PerfEntry>> = {
++        let mut v = Vec::new();
++        v.reserve(512);
++        RefCell::new(v)
++    };
++}
++
++/// Read the x86-64 TSC counter (non-serializing `rdtsc`).
++#[cfg(target_arch = "x86_64")]
++#[inline(always)]
++pub fn get_cycles() -> u64 {
++    let (lo, hi): (u32, u32);
++    unsafe {
++        std::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
++    }
++    ((hi as u64) << 32) | lo as u64
++}
++
++/// Record a begin/end cycle pair into the thread-local buffer.
++/// Cost: TLS access + Vec::push — no syscall, no allocation (if pre-reserved).
++#[inline(always)]
++pub fn perf_record(label: &'static str, begin: u64, end: u64) {
++    PERF_BUFFER.with(|buf| {
++        buf.borrow_mut().push(PerfEntry { label, begin, end });
++    });
++}
++
++// ── TSC frequency calibration ────────────────────────────────────────────────
++
++fn monotonic_ns() -> u64 {
++    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
++    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts); }
++    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
++}
++
++/// Returns TSC ticks per nanosecond (= GHz), calibrated once against CLOCK_MONOTONIC.
++/// Spins for ~5 ms on the first call; subsequent calls are free.
++pub fn tsc_freq_ghz() -> f64 {
++    static TSC_GHZ: OnceLock<f64> = OnceLock::new();
++    *TSC_GHZ.get_or_init(|| {
++        let t0_ns = monotonic_ns();
++        let t0_tsc = get_cycles();
++        let target_ns = t0_ns + 5_000_000; // spin 5 ms
++        loop {
++            let now_ns = monotonic_ns();
++            if now_ns >= target_ns {
++                let dt_tsc = get_cycles().wrapping_sub(t0_tsc);
++                let dt_ns = now_ns - t0_ns;
++                return dt_tsc as f64 / dt_ns as f64;
++            }
++        }
++    })
++}
++
++// ── Dump / reset ─────────────────────────────────────────────────────────────
++
++fn do_dump() {
++    let freq_ghz = tsc_freq_ghz();
++    let entries: Vec<PerfEntry> = PERF_BUFFER.with(|buf| std::mem::take(&mut *buf.borrow_mut()));
++    for e in &entries {
++        let d = e.end.wrapping_sub(e.begin);
++        let us = d as f64 / (freq_ghz * 1e3);
++        let msg = format!(
++            "[PERF] {:<32} begin={:>20}  end={:>20}  delta={:>10} cyc  ({:.3} us)\n",
++            e.label, e.begin, e.end, d, us
++        );
++        unsafe { libc::write(1, msg.as_ptr() as *const libc::c_void, msg.len()); }
++    }
++}
++
++/// Print all buffered perf entries (with auto-calibrated TSC frequency) then clear.
++#[unsafe(no_mangle)]
++pub extern "C" fn wasmer_perf_dump() {
++    do_dump();
++}
++
++/// Discard all buffered entries without printing.
++#[unsafe(no_mangle)]
++pub extern "C" fn wasmer_perf_reset() {
++    PERF_BUFFER.with(|buf| buf.borrow_mut().clear());
++}
+diff --git a/lib/vm/src/trap/traphandlers.rs b/lib/vm/src/trap/traphandlers.rs
+index 6e2d7ccc861..4fdb3646b6b 100644
+--- a/lib/vm/src/trap/traphandlers.rs
++++ b/lib/vm/src/trap/traphandlers.rs
+@@ -91,6 +91,15 @@ pub fn get_stack_size() -> usize {
+ static STACK_POOL: LazyLock<crossbeam_queue::SegQueue<DefaultStack>> =
+     LazyLock::new(crossbeam_queue::SegQueue::new);
+ 
++// ── PERF INSTRUMENTATION ─────────────────────────────────────────────────────
++use crate::perf_trace::{get_cycles, perf_record};
++
++/// Counts how many times a fresh stack was mmap-allocated (pool was empty / too small).
++static NEW_STACK_COUNT: AtomicUsize = AtomicUsize::new(0);
++/// Counts how many times an existing stack was reused from the pool.
++static POOL_STACK_COUNT: AtomicUsize = AtomicUsize::new(0);
++// ── END PERF INSTRUMENTATION ──────────────────────────────────────────────────
++
+ /// Drains the coroutine stack pool at the moment it runs.
+ ///
+ /// This is intended to be called before retrying with a larger stack size so
+@@ -1053,30 +1062,51 @@ fn on_wasm_stack<F: FnOnce() -> T + 'static, T: 'static>(
+     // `drain_stack_pool()` was called. `base() - limit()` is the full mmap
+     // region (including guard page), which is always >= the requested size
+     // for stacks allocated with that size.
+-    let stack = STACK_POOL
+-        .pop()
+-        .filter(|s| s.size() >= stack_size)
+-        .unwrap_or_else(|| DefaultStack::new(stack_size).unwrap());
++
++    // ── PERF INSTRUMENTATION (buffer only — no prints in hot path) ───────────
++
++    // S1: stack acquisition
++    let t_s1_begin = get_cycles();
++    let popped = STACK_POOL.pop().filter(|s| s.size() >= stack_size);
++    let stack_from_pool = popped.is_some();
++    let stack = popped.unwrap_or_else(|| DefaultStack::new(stack_size).unwrap());
++    let t_s1_end = get_cycles();
++    if stack_from_pool {
++        POOL_STACK_COUNT.fetch_add(1, Ordering::Relaxed);
++        perf_record("call S1 stack(pool)", t_s1_begin, t_s1_end);
++    } else {
++        NEW_STACK_COUNT.fetch_add(1, Ordering::Relaxed);
++        perf_record("call S1 stack(new)", t_s1_begin, t_s1_end);
++    }
++
+     let mut stack = scopeguard::guard(stack, |stack| STACK_POOL.push(stack));
+ 
+-    // Create a coroutine with a new stack to run the function on.
++    // S2: coroutine creation
++    let t_s2_begin = get_cycles();
+     let coro = ScopedCoroutine::with_stack(&mut *stack, move |yielder, ()| {
+         // Save the yielder to TLS so that it can be used later.
+         YIELDER.with(|cell| cell.set(Some(yielder.into())));
+-
+         Ok(f())
+     });
++    perf_record("call S2 coro_create", t_s2_begin, get_cycles());
+ 
+     // Ensure that YIELDER is reset on exit even if the coroutine panics,
+     defer! {
+         YIELDER.with(|cell| cell.set(None));
+     }
+ 
+-    coro.scope(|mut coro_ref| {
++    let result = coro.scope(|mut coro_ref| {
+         // Set up metadata for the trap handler for the duration of the coroutine
+         // execution. This is restored to its previous value afterwards.
++
++        // S3: trap handler TLS install (measured up to the point install() calls our closure)
++        let t_s3_begin = get_cycles();
+         TrapHandlerContext::install(trap_handler, coro_ref.trap_handler(), || {
+-            match coro_ref.resume(()) {
++            perf_record("call S3 trap_install", t_s3_begin, get_cycles());
++
++            // S4: wasm execution (trampoline + JIT code)
++            let t_s4_begin = get_cycles();
++            let result = match coro_ref.resume(()) {
+                 CoroutineResult::Yield(trap) => {
+                     // This came from unwind_with which requires that there be only
+                     // Wasm code on the stack.
+@@ -1086,9 +1116,15 @@ fn on_wasm_stack<F: FnOnce() -> T + 'static, T: 'static>(
+                     Err(trap)
+                 }
+                 CoroutineResult::Return(result) => result,
+-            }
++            };
++            perf_record("call S4 wasm_exec", t_s4_begin, get_cycles());
++            result
+         })
+-    })
++    });
++
++    // ── END PERF INSTRUMENTATION ─────────────────────────────────────────────
++
++    result
+ }
+ 
+ /// When executing on the Wasm stack, temporarily switch back to the host stack
