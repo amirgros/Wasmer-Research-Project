@@ -32,3 +32,21 @@ sudo sysctl -w kernel.kptr_restrict=0
 #------------- Set FlameGraph Directory -------------
 export FLAMEGRAPH_DIR=~/projects/tools/FlameGraph
 echo "FLAMEGRAPH_DIR set to: $FLAMEGRAPH_DIR"
+
+
+#------------- "run" helper: pin a command to the locked core -------------
+# Locking Core 1's frequency (above) is not enough on its own -- the OS
+# scheduler can still migrate the process to a different core. `run` pins
+# the process itself to Core $CORE via numactl, so it actually executes on
+# the core whose clock we just fixed. Use this for every measurement run
+# (./sum_test, ./time_test -m 5 -n 20, python3 cycles_test/plot_instance.py, ...);
+# without it, cycle counts pick up noise from core migration.
+run() {
+    if [ -z "$1" ]; then
+        echo "Usage: run <command> [args...]"
+        return 1
+    fi
+    numactl -C $CORE -l "$@"
+}
+export -f run
+echo "run() defined: pins its argument command to Core $CORE (e.g. run ./cycles_test/time_test -n 20)"
