@@ -16,7 +16,8 @@ typedef struct{
 
 typedef struct{
     uint64_t file_load_cycles;
-    uint64_t engine_store_cycles;
+    uint64_t engine_cycles;
+    uint64_t store_cycles;
     uint64_t compile_cycles;
     uint64_t imports_cycles;
     uint64_t global_export_cycles;
@@ -28,7 +29,8 @@ typedef struct{
 inline void print_cycles_log(const cycles_log_t& log) {
     cout << "=== Cycles Log ===" << endl;
     cout << "File Load:      " << CYCLES_TO_US(log.file_load_cycles) << " us" << endl;
-    cout << "Engine & Store: " << CYCLES_TO_US(log.engine_store_cycles) << " us" << endl;
+    cout << "Engine:         " << CYCLES_TO_US(log.engine_cycles) << " us" << endl;
+    cout << "Store:          " << CYCLES_TO_US(log.store_cycles) << " us" << endl;
     cout << "Compile:        " << CYCLES_TO_US(log.compile_cycles) << " us" << endl;
     cout << "Imports:     " << CYCLES_TO_US(log.imports_cycles) << " us" << endl;
     cout << "Find Export Func Index:  " << CYCLES_TO_US(log.global_export_cycles) << " us" << endl;
@@ -45,7 +47,8 @@ inline void print_cycles_log(const cycles_log_t& log) {
 
 inline void devide_cycles_log(cycles_log_t& log, uint64_t divisor, uint64_t call_devisor) {
     log.file_load_cycles /= divisor;
-    log.engine_store_cycles /= divisor;
+    log.engine_cycles /= divisor;
+    log.store_cycles /= divisor;
     log.compile_cycles /= divisor;
     log.imports_cycles /= divisor;
     log.global_export_cycles /= divisor;

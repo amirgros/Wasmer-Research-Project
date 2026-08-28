@@ -1,5 +1,7 @@
 #include "includes.h"
-
+extern void wasmer_perf_dump(void);   // perf_trace, not in generated header
+extern void wasmer_perf_reset(void);
+extern "C" void wasmer_linear_memory_pool_stats(void);
 
 /**
  * @brief Executes a Wasmer test for a sum function with no args or exports.
@@ -43,18 +45,26 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
     // ---------------------------------------------------------------------------------------
   
 
-    // 2. SETUP THE ENGINE & STORE
+    // 2. SETUP THE ENGINE
     cycles_diff_base = get_cycles();
     // wasm_config_t* engine_config = wasm_config_new();
     // wasm_config_set_backend(engine_config, LLVM);
 
     // wasm_engine_t* engine = wasm_engine_new_with_config(engine_config);
     wasm_engine_t* engine = wasm_engine_new();
-
-    wasm_store_t* store = wasm_store_new(engine); // MEM
-    log.engine_store_cycles += (get_cycles() - cycles_diff_base);
+    log.engine_cycles += (get_cycles() - cycles_diff_base);
     if (print_flag) {
-        cout << "Engine and store created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
+        cout << "Engine created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
+    }
+
+    // ---------------------------------------------------------------------------------------
+
+    // 2b. SETUP THE STORE
+    cycles_diff_base = get_cycles();
+    wasm_store_t* store = wasm_store_new(engine); // MEM
+    log.store_cycles += (get_cycles() - cycles_diff_base);
+    if (print_flag) {
+        cout << "Store created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -155,7 +165,9 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
         if (print_flag) {
             cout << "Instantiating module instance " << (i + 1) << "...\n";
         }
-                
+
+        wasmer_perf_reset(); // Reset Wasmer's internal performance counters before each instantiation and call sequence
+        
         // ---------------------------------------------------------------------------------------
         
         // 7. INSTANTIATE (THE HANDSHAKE)
@@ -226,7 +238,10 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
         }
         wasm_extern_vec_delete(&exports);
         wasm_instance_delete(instance);
+
+        wasmer_perf_dump(); // Dump performance data collected by Wasmer (if any)
     }
+
     // wasi_env_delete(wasi_env); 
     // wasm_extern_vec_delete(&wasi_imports);
     wasm_exporttype_vec_delete(&export_types);
@@ -238,11 +253,17 @@ int test_call(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, c
 }
 
 
-int main() {
-    int main_iterations = 1;
-    int call_iterations = 1;
-    int num_instances = 10;
-    bool print_flag = false;
+int main(int argc, char* argv[]) {
+    auto arg = [&](const char* flag, int def) {
+        for (int i = 1; i+1 < argc; i++)
+            if (strcmp(argv[i], flag) == 0) return atoi(argv[i+1]);
+        return def;
+    };
+
+    int main_iterations = arg("-m", 1);
+    int call_iterations = arg("-c", 1);
+    int num_instances   = arg("-n", 10);
+    bool print_flag     = false;
     vector<int> args_vec = {};
     const char* file_name = "./wasm/time.wasm"; 
     const char* func_name = "wasm_time";
@@ -259,6 +280,9 @@ int main() {
     // statistics
     devide_cycles_log(*log, main_iterations, call_iterations);
     print_cycles_log(*log);
+
+    // print linear memory pool statistics if compiled with USE_LINEAR_MEMORY_POOL enabled in the wasmer repo
+    wasmer_linear_memory_pool_stats();
 
     // compare direct call
     int x = -1;

@@ -36,14 +36,21 @@ int sum_test(cycles_log_t& log, bool print_flag, const vector<int>& args_vec, co
     }
     log.file_load_cycles += (get_cycles() - cycles_diff_base);
 
-    // 2. SETUP THE ENGINE & STORE
+    // 2. SETUP THE ENGINE
     cycles_diff_base = get_cycles();
     wasm_engine_t* engine = wasm_engine_new();
-    wasm_store_t* store = wasm_store_new(engine); // MEM
+    log.engine_cycles += (get_cycles() - cycles_diff_base);
     if (print_flag) {
-        cout << "Engine and store created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
+        cout << "Engine created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
     }
-    log.engine_store_cycles += (get_cycles() - cycles_diff_base);
+
+    // 2b. SETUP THE STORE
+    cycles_diff_base = get_cycles();
+    wasm_store_t* store = wasm_store_new(engine); // MEM
+    log.store_cycles += (get_cycles() - cycles_diff_base);
+    if (print_flag) {
+        cout << "Store created. Cycles: " << (get_cycles() - cycles_diff_base) << endl;
+    }
 
     // 3. COMPILE THE MODULE
     cycles_diff_base = get_cycles();
